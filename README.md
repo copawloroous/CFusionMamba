@@ -2,4 +2,4 @@
 
 ![pic.png](pic.png)
 
-![preview.png](preview.png)
+![Preview.png](Preview.png)
