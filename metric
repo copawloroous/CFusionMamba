@@ -1,0 +1,143 @@
+# 六个评估指标函数
+def CC_evaluation(A, B, F):
+    """相关系数评估"""
+    A = A.astype(np.float64)
+    B = B.astype(np.float64)
+    F = F.astype(np.float64)
+
+    rAF = np.sum((A - np.mean(A)) * (F - np.mean(F))) / np.sqrt(
+        np.sum((A - np.mean(A)) ** 2) * np.sum((F - np.mean(F)) ** 2))
+    rBF = np.sum((B - np.mean(B)) * (F - np.mean(F))) / np.sqrt(
+        np.sum((B - np.mean(B)) ** 2) * np.sum((F - np.mean(F)) ** 2))
+    CC = (rAF + rBF) / 2
+    return CC
+
+
+def mutual_information(grey_matrixA, grey_matrixB, grey_matrixF, grey_level=256):
+    """互信息评估"""
+
+    def histogram_entropy(img, grey_level):
+        hist, _ = np.histogram(img.flatten(), bins=grey_level, range=(0, grey_level - 1))
+        hist = hist.astype(np.float64)
+        hist = hist / np.sum(hist)
+        hist = hist[hist > 0]
+        return -np.sum(hist * np.log2(hist))
+
+    def joint_histogram_entropy(img1, img2, grey_level):
+        joint_hist, _, _ = np.histogram2d(img1.flatten(), img2.flatten(),
+                                          bins=grey_level, range=[[0, grey_level - 1], [0, grey_level - 1]])
+        joint_hist = joint_hist.astype(np.float64)
+        joint_hist = joint_hist / np.sum(joint_hist)
+        joint_hist = joint_hist[joint_hist > 0]
+        return -np.sum(joint_hist * np.log2(joint_hist))
+
+    HA = histogram_entropy(grey_matrixA, grey_level)
+    HB = histogram_entropy(grey_matrixB, grey_level)
+    HF = histogram_entropy(grey_matrixF, grey_level)
+    HFA = joint_histogram_entropy(grey_matrixF, grey_matrixA, grey_level)
+    HFB = joint_histogram_entropy(grey_matrixF, grey_matrixB, grey_level)
+
+    MIFA = HA + HF - HFA
+    MIFB = HB + HF - HFB
+    return MIFA + MIFB
+
+
+def PSNR_evaluation(A, B, F):
+    """峰值信噪比评估"""
+    A = A.astype(np.float64) / 255.0
+    B = B.astype(np.float64) / 255.0
+    F = F.astype(np.float64) / 255.0
+
+    mse_af = np.mean((F - A) ** 2)
+    mse_bf = np.mean((F - B) ** 2)
+    mse = 0.5 * mse_af + 0.5 * mse_bf
+    if mse == 0:
+        return float('inf')
+    return 20 * np.log10(1.0 / np.sqrt(mse))
+
+
+def SF_evaluation(MF):
+    """空间频率评估"""
+    MF = MF.astype(np.float64)
+    rf = np.diff(MF, axis=0)
+    cf = np.diff(MF, axis=1)
+    rf1 = np.sqrt(np.mean(rf ** 2))
+    cf1 = np.sqrt(np.mean(cf ** 2))
+    return np.sqrt(rf1 ** 2 + cf1 ** 2)
+
+
+def SSIM_evaluation(A, B, F):
+    """结构相似性评估"""
+    # 转换为灰度图
+    if len(A.shape) == 3:
+        A_gray = cv2.cvtColor(A, cv2.COLOR_RGB2GRAY)
+        B_gray = cv2.cvtColor(B, cv2.COLOR_RGB2GRAY)
+        F_gray = cv2.cvtColor(F, cv2.COLOR_RGB2GRAY)
+    else:
+        A_gray, B_gray, F_gray = A, B, F
+
+    ssim_af = ssim(A_gray, F_gray, data_range=F_gray.max() - F_gray.min())
+    ssim_bf = ssim(B_gray, F_gray, data_range=F_gray.max() - F_gray.min())
+    return (ssim_af + ssim_bf) / 2
+
+
+def vifp_mscale(ref, dist):
+    """视觉信息保真度评估"""
+    sigma_nsq = 2
+    num = 0
+    den = 0
+
+    for scale in range(1, 5):
+        N = 2 ** (4 - scale + 1) + 1
+        win = cv2.getGaussianKernel(N, N / 5)
+        win = win * win.T
+
+        if scale > 1:
+            ref = cv2.filter2D(ref, -1, win)[::2, ::2]
+            dist = cv2.filter2D(dist, -1, win)[::2, ::2]
+
+        mu1 = cv2.filter2D(ref, -1, win, borderType=cv2.BORDER_CONSTANT)
+        mu2 = cv2.filter2D(dist, -1, win, borderType=cv2.BORDER_CONSTANT)
+        mu1_sq = mu1 * mu1
+        mu2_sq = mu2 * mu2
+        mu1_mu2 = mu1 * mu2
+
+        sigma1_sq = cv2.filter2D(ref * ref, -1, win, borderType=cv2.BORDER_CONSTANT) - mu1_sq
+        sigma2_sq = cv2.filter2D(dist * dist, -1, win, borderType=cv2.BORDER_CONSTANT) - mu2_sq
+        sigma12 = cv2.filter2D(ref * dist, -1, win, borderType=cv2.BORDER_CONSTANT) - mu1_mu2
+
+        sigma1_sq[sigma1_sq < 0] = 0
+        sigma2_sq[sigma2_sq < 0] = 0
+
+        g = sigma12 / (sigma1_sq + 1e-10)
+        sv_sq = sigma2_sq - g * sigma12
+
+        g[sigma1_sq < 1e-10] = 0
+        sv_sq[sigma1_sq < 1e-10] = sigma2_sq[sigma1_sq < 1e-10]
+        sigma1_sq[sigma1_sq < 1e-10] = 0
+
+        g[sigma2_sq < 1e-10] = 0
+        sv_sq[sigma2_sq < 1e-10] = 0
+
+        sv_sq[sv_sq <= 1e-10] = 1e-10
+        g[g < 0] = 0
+        sv_sq[g < 0] = sigma2_sq[g < 0]
+
+        num += np.sum(np.log10(1 + g ** 2 * sigma1_sq / (sv_sq + sigma_nsq)))
+        den += np.sum(np.log10(1 + sigma1_sq / sigma_nsq))
+
+    return num / den if den != 0 else 0
+
+
+def VIF_evaluation(A, B, F):
+    """VIF评估"""
+    if len(A.shape) == 3:
+        A_gray = cv2.cvtColor(A, cv2.COLOR_RGB2GRAY)
+        B_gray = cv2.cvtColor(B, cv2.COLOR_RGB2GRAY)
+        F_gray = cv2.cvtColor(F, cv2.COLOR_RGB2GRAY)
+    else:
+        A_gray, B_gray, F_gray = A, B, F
+
+    vif_af = vifp_mscale(A_gray.astype(np.float64), F_gray.astype(np.float64))
+    vif_bf = vifp_mscale(B_gray.astype(np.float64), F_gray.astype(np.float64))
+    return (vif_af + vif_bf) / 2
